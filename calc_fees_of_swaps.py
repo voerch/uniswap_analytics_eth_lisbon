@@ -7,36 +7,34 @@ pool_creations_df =  spark.read.table("uniswap_v3_ethereum.factory_1_event_poolc
 token_infos_df =  spark.read.table("tokens_ethereum.erc20")
 prices_df = spark.read.table("prices_uniswap.usd_minute")
 
+pool_creations_df = pool_creations_df.drop(f.col('blockchain'))
+token_infos_df = token_infos_df.drop(f.col('blockchain'))
+prices_df = prices_df.drop(f.col('blockchain'))
+
 # Lowercase the 'pool' column in pool_creations_df
 pool_creations_df = pool_creations_df.withColumn('pool', f.lower(f.col('pool')))
 pool_creations_df = pool_creations_df.withColumn('token0', f.lower(f.col('token0')))
 pool_creations_df = pool_creations_df.withColumn('token1', f.lower(f.col('token1')))
 
+
 # Join pool information like fees and ticks.
 swaps_w_fees_df = raw_swaps_df.join(pool_creations_df.select('pool', 'fee', 'tickSpacing', 'token0', 'token1'), raw_swaps_df.contract_address == pool_creations_df.pool, 'left')
 
 
-# Join token information like symbol and decimals.
-swaps_w_fees_df = swaps_w_fees_df.join(token_infos_df, 
-                                        swaps_w_fees_df.token0 == token_infos_df.contract_address, 
-                                        'left') \
-                                  .withColumnRenamed('symbol', 'symbol0') \
-                                  .withColumnRenamed('decimals', 'decimals0')
+swaps_w_fees_df = swaps_w_fees_df.alias('a').join(token_infos_df.alias('b'), 
+                                                  f.col('a.token0') == f.col('b.contract_address'), 'left') \
+                                        .withColumnRenamed('symbol', 'symbol0') \
+                                        .withColumnRenamed('decimals', 'decimals0')
+                                        
+swaps_w_fees_df = swaps_w_fees_df.drop(f.col('b.contract_address'))
 
-# Drop the extra 'contract_address' column from the first join
-swaps_w_fees_df = swaps_w_fees_df.drop(token_infos_df.contract_address)
+# Use alias and join token information like symbol and decimals for token1.
+swaps_w_fees_df = swaps_w_fees_df.alias('a').join(token_infos_df.alias('b'), 
+                                                  f.col('a.token1') == f.col('b.contract_address'), 'left') \
+                                        .withColumnRenamed('symbol', 'symbol1') \
+                                        .withColumnRenamed('decimals', 'decimals1')
 
-# Join for token1
-swaps_w_fees_df = swaps_w_fees_df.join(token_infos_df, 
-                                        swaps_w_fees_df.token1 == token_infos_df.contract_address, 
-                                        'left') \
-                                  .withColumnRenamed('symbol', 'symbol1') \
-                                  .withColumnRenamed('decimals', 'decimals1')
-
-# Drop the extra 'contract_address' column from the second join
-swaps_w_fees_df = swaps_w_fees_df.drop(token_infos_df.contract_address)
-
-
+swaps_w_fees_df = swaps_w_fees_df.drop(f.col('b.contract_address'))
 
 # 1. Calculate price from tick
 swaps_w_fees_df = swaps_w_fees_df.withColumn('price', f.pow(f.lit(1.0001), f.col('tick')))
@@ -54,23 +52,13 @@ swaps_w_fees_df = swaps_w_fees_df.withColumn('sqrt_price', f.sqrt('price'))
 swaps_w_fees_df = swaps_w_fees_df.withColumn('sqrt_low_tick_price', f.sqrt('low_tick_price'))
 swaps_w_fees_df = swaps_w_fees_df.withColumn('sqrt_top_tick_price', f.sqrt('top_tick_price'))
 
+# Calculate token reserves for low and top ticks
+swaps_w_fees_df = swaps_w_fees_df.withColumn('token0_reserve', 
+                                             (f.col('liquidity') * (f.col('sqrt_top_tick_price') - f.col('sqrt_price')) / 
+                                             (f.col('sqrt_top_tick_price') * f.col('sqrt_price'))) / f.pow(f.lit(10), f.col('decimals0')))
 
-# 1. Calculate price from tick
-swaps_w_fees_df = swaps_w_fees_df.withColumn('price', f.pow(f.lit(1.0001), f.col('tick')))
-
-# 2. Calculate low tick and top tick with adjustment for negative ticks
-swaps_w_fees_df = swaps_w_fees_df.withColumn('low_tick', f.when(f.col('tick') < 0, ((f.col('tick') / f.col('tickSpacing')).cast('integer') - 1) * f.col('tickSpacing')).otherwise((f.col('tick') / f.col('tickSpacing')).cast('integer') * f.col('tickSpacing')))
-swaps_w_fees_df = swaps_w_fees_df.withColumn('top_tick', f.when(f.col('tick') < 0, (f.col('tick') / f.col('tickSpacing')).cast('integer') * f.col('tickSpacing')).otherwise(((f.col('tick') / f.col('tickSpacing')).cast('integer') + 1) * f.col('tickSpacing')))
-
-# 3. Calculate price of low tick and top tick
-swaps_w_fees_df = swaps_w_fees_df.withColumn('low_tick_price', f.pow(f.lit(1.0001), f.col('low_tick')))
-swaps_w_fees_df = swaps_w_fees_df.withColumn('top_tick_price', f.pow(f.lit(1.0001), f.col('top_tick')))
-
-# 4. Calculate square root of price
-swaps_w_fees_df = swaps_w_fees_df.withColumn('sqrt_price', f.sqrt('price'))
-swaps_w_fees_df = swaps_w_fees_df.withColumn('sqrt_low_tick_price', f.sqrt('low_tick_price'))
-swaps_w_fees_df = swaps_w_fees_df.withColumn('sqrt_top_tick_price', f.sqrt('top_tick_price'))
-
+swaps_w_fees_df = swaps_w_fees_df.withColumn('token1_reserve', 
+                                             (f.col('liquidity') * (f.col('sqrt_price') - f.col('sqrt_low_tick_price'))) / f.pow(f.lit(10), f.col('decimals1')))
 
 # Filters w.r.t. the token universe. 
 swaps_w_fees_df = swaps_w_fees_df.dropna(subset=['decimals0', 'decimals1'])
@@ -114,7 +102,7 @@ swaps_w_fees_df = swaps_w_fees_df.alias('a').join(
     'left_outer'
 ).select('a.*', f.col('b.price').alias('token1_price'))
 
-swaps_w_fees_df = swaps_w_fees_df.drop('b.contract_address', 'b.minute')
+swaps_w_fees_df = swaps_w_fees_df.drop('b.blockchain', 'b.contract_address', 'b.minute')
 
 # Calculate USD value of token0 and token1 reserves
 swaps_w_fees_df = swaps_w_fees_df.withColumn('token0_reserve_usd', f.col('amount0') * f.col('token0_price'))
@@ -126,3 +114,5 @@ swaps_w_fees_df = swaps_w_fees_df.withColumn('fee1_usd', f.when(f.col('amount1')
 
 # Calculate yield per dollar
 swaps_w_fees_df = swaps_w_fees_df.withColumn('yield_per_dollar', (f.col('fee0_usd') + f.col('fee1_usd')) / (f.col('token0_reserve_usd') + f.col('token1_reserve_usd')))
+
+swaps_w_fees_df.coalesce(1).write.format("com.databricks.spark.csv").option("header", "true").option("compression", "gzip").save("dbfs:/FileStore/temp/swaps_w_fees_df_0.csv")
