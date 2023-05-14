@@ -8,3 +8,8 @@ This project aims to assist market participants to make better decisions to dete
 By design every swap event contains ex-ante active liquidity in the current tick range. We parsed these on-chain swap events, calculated fee accrued from each swap to the current providers and how much liquidity was active in during the swap. Hence creating a new metric named highest yield per dollar. In our dashboards users can check aggregated highest yield per dollar and also individual swaps, the ex-ante liquidity during that swap and many more assisting statistics. We heavily relied on python and its libraries such as pyspark, pandas and streamlit to create this structure. 
 
 Further Improvements: Due to computational costs only select number of pools were analyzed, this can be expanded into any existing pool. Additionally, many rebalancing strategies can be built on this simple idea. For example, just like a momentum strategy one may choose to quote a wide range of ticks in case of trending yield per dollar & price. 
+
+
+Try it yourself: Please find the sample data in the drive folder linked below. Once you download the data, you can run streamlit run liq_pockets_dashboard.py to access the dashboard.
+
+https://drive.google.com/drive/folders/1cK-_9GGDLOfeYj4H4hlB12eFbMB8Uejj?usp=sharing
